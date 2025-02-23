@@ -102,6 +102,39 @@ def format_gemini_response(response) -> str:
         return f"I apologize, but I encountered an error processing the response: {str(e)}"
 
 # Middleware for handling preflight requests
+@app.route('/')
+def home():
+    return jsonify({
+        'message': 'LearnFast API is running',
+        'status': 'active',
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/health')
+def health_check():
+    try:
+        # Check MongoDB connection
+        client.admin.command('ping')
+        
+        # Check Gemini API
+        test_response = model.generate_content("Test connection")
+        gemini_status = "connected"
+
+        return jsonify({
+            'status': 'healthy',
+            'database': 'connected',
+            'database_name': DB_NAME,
+            'gemini_api': gemini_status,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"Health check error: {str(e)}")
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
