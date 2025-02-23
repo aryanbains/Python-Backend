@@ -12,9 +12,10 @@ from model import (
     create_schedule_time_based,
     create_schedule_day_based,
     validate_playlist_url,
-    get_schedule_summary
+    get_schedule_summary,
+    parse_duration,
+    format_duration
 )
-
 # Load environment variables
 load_dotenv()
 
@@ -90,13 +91,52 @@ def get_schedule_detail(schedule_id):
         if not schedule:
             return jsonify({'error': 'Schedule not found'}), 404
 
-        formatted_schedule = format_schedule_response(schedule)
+        # Format the schedule data to match the frontend interface
+        formatted_schedule = {
+            '_id': str(schedule['_id']),
+            'userId': str(schedule['userId']),
+            'title': schedule['title'],
+            'playlist_url': schedule['playlist_url'],
+            'schedule_type': schedule['schedule_type'],
+            'settings': schedule['settings'],
+            'status': schedule.get('status', 'active'),
+            'created_at': schedule['created_at'].isoformat(),
+            'updated_at': schedule['updated_at'].isoformat(),
+            'summary': {
+                'totalVideos': schedule['summary'].get('Total Videos', 0),
+                'totalDays': schedule['summary'].get('Total Days', 0),
+                'totalDuration': schedule['summary'].get('Total Duration', '00:00:00'),
+                'averageDailyDuration': schedule['summary'].get('Average Daily', '00:00:00')
+            },
+            'schedule_data': []
+        }
+
+        # Format schedule_data
+        for day_data in schedule.get('schedule_data', []):
+            formatted_day = {
+                'day': day_data['day'],
+                'date': day_data['date'],
+                'videos': []
+            }
+            
+            for video in day_data.get('videos', []):
+                formatted_video = {
+                    'title': video.get('title', ''),
+                    'duration': video.get('duration', '00:00:00'),
+                    'link': video.get('link'),
+                    'thumbnail': video.get('thumbnail'),
+                    'completed': video.get('completed', False)
+                }
+                formatted_day['videos'].append(formatted_video)
+            
+            formatted_schedule['schedule_data'].append(formatted_day)
+
         return jsonify({'schedule': formatted_schedule})
 
     except Exception as e:
         print(f"Error fetching schedule: {str(e)}")
         return jsonify({'error': 'Failed to fetch schedule'}), 500
-
+    
 @app.route('/api/schedule', methods=['POST', 'OPTIONS'])
 def create_schedule():
     if request.method == 'OPTIONS':
@@ -141,15 +181,10 @@ def create_schedule():
             try:
                 daily_hours = float(data.get('dailyHours', 2))
                 daily_minutes = int(daily_hours * 60)
-                if daily_minutes <= 10:
-                    return jsonify({'error': 'Daily study time must be greater than 10 minutes'}), 400
                 
                 schedule = create_schedule_time_based(
                     video_details=video_details,
-                    daily_time_minutes=daily_minutes,
-                    completed_videos=completed_videos,
-                    last_day_number=last_day_number,
-                    completed_video_details=completed_video_details
+                    daily_time_minutes=daily_minutes
                 )
                 settings = {'daily_hours': daily_hours}
             except ValueError as e:
@@ -162,37 +197,42 @@ def create_schedule():
                 
                 schedule = create_schedule_day_based(
                     video_details=video_details,
-                    num_days=target_days,
-                    completed_videos=completed_videos,
-                    last_day_number=last_day_number,
-                    completed_video_details=completed_video_details
+                    num_days=target_days
                 )
                 settings = {'target_days': target_days}
             except ValueError as e:
                 return jsonify({'error': str(e)}), 400
 
-        # Format and save schedule to MongoDB
+        # Format schedule data for MongoDB
+        schedule_data = []
+        for day, videos in schedule.items():
+            day_number = int(day.split()[1])
+            schedule_data.append({
+                'day': day,
+                'date': (datetime.now() + timedelta(days=day_number - 1)).strftime('%Y-%m-%d'),
+                'videos': [
+                    {
+                        **video,
+                        'completed': video['link'] in (completed_videos or [])
+                    } for video in videos
+                ]
+            })
+
+        # Create MongoDB document
         schedule_doc = {
             'userId': ObjectId(user_id),
             'title': title,
             'playlist_url': playlist_url,
             'schedule_type': schedule_type,
             'settings': settings,
-            'schedule_data': [
-                {
-                    'day': day,
-                    'date': (datetime.now() + timedelta(days=int(day.split()[1]) - 1)).strftime('%Y-%m-%d'),
-                    'videos': videos
-                }
-                for day, videos in schedule.items()
-            ],
+            'schedule_data': schedule_data,
             'summary': get_schedule_summary(schedule),
             'status': 'active',
             'created_at': datetime.now(),
             'updated_at': datetime.now()
         }
 
-        # If this is an adjustment, handle the old schedule
+        # Handle schedule adjustment if needed
         if is_adjustment and old_schedule_id:
             try:
                 old_schedule = schedules_collection.find_one({'_id': ObjectId(old_schedule_id)})
@@ -242,7 +282,9 @@ def get_user_schedules(user_id):
         return jsonify({'schedules': formatted_schedules})
     except Exception as e:
         print(f"Error fetching user schedules: {str(e)}")
-        return jsonify({'error': 'Failed to fetch schedules'}), 500@app.route('/api/schedules/<schedule_id>/adjust', methods=['POST', 'OPTIONS'])
+        return jsonify({'error': 'Failed to fetch schedules'}), 500
+
+@app.route('/api/schedules/<schedule_id>/adjust', methods=['POST', 'OPTIONS'])
 def adjust_schedule(schedule_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200

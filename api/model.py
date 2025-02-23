@@ -1,208 +1,319 @@
-# model.py
-
-from pytubefix import Playlist
-from datetime import timedelta
 import re
-import concurrent.futures
+import os
+from datetime import timedelta
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
+# ================== GLOBAL YOUTUBE CLIENT INITIALIZATION ==================
+API_KEY = "AIzaSyBlUH-gxxX4tiJ8rK5Yinop-xHn1XXDI3w"  # ← REPLACE WITH YOUR KEY
+
+try:
+    youtube = build('youtube', 'v3', developerKey=API_KEY)
+except Exception as e:
+    raise RuntimeError(f"Failed to initialize YouTube API: {str(e)}")
+
+def main():
+    print("=== YouTube Playlist Scheduler ===")
+    
+    # Get playlist URL
+    playlist_url = input("\nEnter YouTube playlist URL: ").strip()
+    
+    try:
+        print("\nFetching playlist details...")
+        videos = fetch_playlist_details(playlist_url)
+        print(f"Found {len(videos)} videos")
+        
+        # Get scheduling preference
+        while True:
+            schedule_type = input("\nChoose scheduling method:\n1. Time-based (minutes per day)\n2. Day-based (number of days)\nEnter choice (1/2): ").strip()
+            
+            if schedule_type in ['1', '2']:
+                break
+            print("Invalid choice. Please enter 1 or 2.")
+        
+        schedule = None
+        if schedule_type == '1':
+            while True:
+                try:
+                    daily_time = int(input("\nEnter desired study time (minutes per day): "))
+                    if daily_time > 0:
+                        schedule = create_schedule_time_based(videos, daily_time)
+                        break
+                    print("Please enter a positive number.")
+                except ValueError:
+                    print("Please enter a valid number.")
+        else:
+            while True:
+                try:
+                    num_days = int(input("\nEnter number of days to complete the playlist: "))
+                    if num_days > 0:
+                        schedule = create_schedule_day_based(videos, num_days)
+                        break
+                    print("Please enter a positive number.")
+                except ValueError:
+                    print("Please enter a valid number.")
+        
+        # Print schedule summary
+        print("\nSchedule Summary:")
+        summary = get_schedule_summary(schedule)
+        for key, value in summary.items():
+            print(f"{key:20}: {value}")
+        
+        # Print detailed schedule
+        print("\nDetailed Schedule:")
+        for day, videos in schedule.items():
+            total_duration = sum(parse_duration(v['duration']) for v in videos if v.get('duration') != "00:00:00")
+            print(f"\n{day} (Total: {format_duration(total_duration)}):")
+            for video in videos:
+                if video.get('link'):  # Skip revision days
+                    print(f"  - {video['title']} ({video['duration']})")
+                else:
+                    print(f"  - {video['title']}")
+        
+    except Exception as e:
+        print(f"\nERROR: {str(e)}")
+        print("\nPossible solutions:")
+        print("1. Check your internet connection")
+        print("2. Verify the playlist URL is correct and accessible")
+        print("3. Check API key validity")
+        print("4. Try again later if the service is temporarily unavailable")
+
+# Keep all the original functions from the previous code
 def validate_playlist_url(url):
-    """Validate YouTube playlist URL."""
+    """Validate YouTube playlist URL format."""
     if not url:
         raise ValueError("Playlist URL cannot be empty")
-    if "youtube.com/playlist" not in url and "youtu.be" not in url:
-        raise ValueError("Invalid YouTube playlist URL")
+    patterns = [
+        r'youtube\.com/playlist\?list=',
+        r'youtu\.be/.*\?list=',
+        r'list='
+    ]
+    if not any(re.search(pattern, url) for pattern in patterns):
+        raise ValueError("Invalid YouTube playlist URL format")
     return True
 
+def extract_playlist_id(url):
+    """Extract playlist ID from URL using multiple patterns."""
+    patterns = [
+        r'list=([a-zA-Z0-9_-]+)',
+        r'youtu\.be/.*\?list=([a-zA-Z0-9_-]+)',
+        r'/playlist/([a-zA-Z0-9_-]+)'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    raise ValueError("Could not extract playlist ID from URL")
+
 def format_duration(seconds):
-    """Format duration in seconds to HH:MM:SS."""
-    return str(timedelta(seconds=seconds))
+    """Format seconds to HH:MM:SS with leading zeros."""
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
 
-def get_video_thumbnail(video_id):
-    """Get video thumbnail URL."""
-    return f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
-
-def extract_video_id(url):
-    """Extract video ID from YouTube URL."""
-    pattern = r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
-    match = re.search(pattern, url)
-    return match.group(1) if match else None
+def parse_iso_duration(duration_str):
+    """Convert ISO 8601 duration to total seconds."""
+    duration_str = duration_str.upper().replace('PT', '')
+    total_seconds = 0
+    time_components = {'H': 0, 'M': 0, 'S': 0}
+    current_value = ''
+    
+    for char in duration_str:
+        if char.isdigit():
+            current_value += char
+        elif char in time_components:
+            time_components[char] = int(current_value) if current_value else 0
+            current_value = ''
+    
+    return (time_components['H'] * 3600 
+            + time_components['M'] * 60 
+            + time_components['S'])
 
 def parse_duration(duration_str):
-    """Convert duration string to seconds."""
-    parts = duration_str.split(':')
-    if len(parts) == 3:
-        hours, minutes, seconds = map(int, parts)
-        return hours * 3600 + minutes * 60 + seconds
-    elif len(parts) == 2:
-        minutes, seconds = map(int, parts)
-        return minutes * 60 + seconds
-    return int(parts[0])
-
-def fetch_single_video(video):
-    """Fetch details for a single video."""
-    try:
-        video_id = extract_video_id(video.watch_url)
-        return {
-            "title": video.title,
-            "duration": format_duration(video.length),
-            "link": video.watch_url,
-            "thumbnail": get_video_thumbnail(video_id)
-        }
-    except Exception as e:
-        print(f"Error processing video: {str(e)}")
-        return None
+    """Convert HH:MM:SS string to total seconds."""
+    parts = list(map(int, duration_str.split(':')))
+    multipliers = [3600, 60, 1]
+    return sum(part * mult for part, mult in zip(parts[-3:], multipliers[-len(parts):]))
 
 def fetch_playlist_details(playlist_url):
-    """Fetch details of all videos in a playlist using concurrent processing."""
+    """Fetch all video details from a YouTube playlist."""
+    if not youtube:
+        raise RuntimeError("YouTube API client not initialized")
+    
     try:
-        playlist = Playlist(playlist_url)
-        if not playlist.videos:
-            raise ValueError("The playlist is empty or inaccessible.")
+        validate_playlist_url(playlist_url)
+        playlist_id = extract_playlist_id(playlist_url)
         
-        # Use ThreadPoolExecutor for parallel processing
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Process videos concurrently
-            video_details = list(executor.map(fetch_single_video, playlist.videos))
+        # Fetch all video IDs from playlist
+        video_ids = []
+        next_page_token = None
         
-        # Filter out None values (failed videos)
-        video_details = [video for video in video_details if video is not None]
-        
-        if not video_details:
-            raise ValueError("No valid videos found in playlist")
-        
+        while True:
+            request = youtube.playlistItems().list(
+                part="snippet",
+                playlistId=playlist_id,
+                maxResults=50,
+                pageToken=next_page_token
+            )
+            response = request.execute()
+            
+            video_ids.extend([
+                item['snippet']['resourceId']['videoId']
+                for item in response.get('items', [])
+            ])
+            
+            next_page_token = response.get('nextPageToken')
+            if not next_page_token:
+                break
+
+        if not video_ids:
+            raise ValueError("Playlist is empty or inaccessible")
+
+        # Fetch video details in batches
+        video_details = []
+        for i in range(0, len(video_ids), 50):
+            batch_ids = video_ids[i:i+50]
+            
+            videos_request = youtube.videos().list(
+                part="snippet,contentDetails",
+                id=",".join(batch_ids)
+            )
+            videos_response = videos_request.execute()
+            
+            for item in videos_response.get('items', []):
+                try:
+                    video_id = item['id']
+                    duration = parse_iso_duration(
+                        item['contentDetails']['duration']
+                    )
+                    video_details.append({
+                        "title": item['snippet']['title'],
+                        "duration": format_duration(duration),
+                        "link": f"https://youtu.be/{video_id}",
+                        "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                        "video_id": video_id
+                    })
+                except KeyError as e:
+                    print(f"Skipping video due to missing data: {str(e)}")
+                    continue
+
         return video_details
-    except Exception as e:
-        raise Exception(f"Error fetching playlist details: {str(e)}")
 
-def create_schedule_time_based(video_details, daily_time_minutes, completed_videos=None, last_day_number=0, completed_video_details=None):
-    """Create schedule based on daily time limit."""
-    try:
-        completed_videos = completed_videos or []
-        completed_video_details = completed_video_details or []
-        daily_time_seconds = (daily_time_minutes - 10) * 60
-        schedule = {}
-        
-        # First, preserve completed videos in their original days
-        for video in completed_video_details:
-            day_key = f"Day {last_day_number}"
-            if day_key not in schedule:
-                schedule[day_key] = []
-            schedule[day_key].append(video)
-
-        # Start scheduling remaining videos from the next day
-        current_day = last_day_number + 1
-        current_day_videos = []
-        current_day_duration = 0
-
-        # Schedule only non-completed videos
-        remaining_videos = [
-            video for video in video_details 
-            if video['link'] not in completed_videos
-        ]
-
-        for video in remaining_videos:
-            video_duration = parse_duration(video["duration"])
-
-            if current_day_duration + video_duration <= daily_time_seconds:
-                current_day_videos.append(video)
-                current_day_duration += video_duration
-            else:
-                if current_day_videos:
-                    schedule[f"Day {current_day}"] = current_day_videos
-                    current_day += 1
-                current_day_videos = [video]
-                current_day_duration = video_duration
-
-        if current_day_videos:
-            schedule[f"Day {current_day}"] = current_day_videos
-
-        return schedule
-
-    except Exception as e:
-        raise ValueError(f"Error creating time-based schedule: {str(e)}")
-
-def create_schedule_day_based(video_details, num_days, completed_videos=None, last_day_number=0, completed_video_details=None):
-    """Create schedule based on number of days."""
-    try:
-        completed_videos = completed_videos or []
-        completed_video_details = completed_video_details or []
-        schedule = {}
-
-        # First, preserve completed videos in their original days
-        for video in completed_video_details:
-            day_key = f"Day {last_day_number}"
-            if day_key not in schedule:
-                schedule[day_key] = []
-            schedule[day_key].append(video)
-
-        # Calculate total duration for remaining videos
-        remaining_videos = [
-            video for video in video_details 
-            if video['link'] not in completed_videos
-        ]
-
-        if not remaining_videos:
-            return schedule
-
-        total_duration = sum(
-            parse_duration(video["duration"])
-            for video in remaining_videos
+    except HttpError as e:
+        error = e.error_details[0]['message']
+        status = e.resp.status
+        raise RuntimeError(
+            f"YouTube API Error ({status}): {error}\n"
+            "Common fixes:\n"
+            "1. Check API key validity\n"
+            "2. Verify YouTube Data API v3 is enabled\n"
+            "3. Check API quota usage"
         )
-
-        # Calculate average daily duration for remaining days
-        remaining_days = num_days - last_day_number
-        if remaining_days <= 0:
-            remaining_days = 1
-        avg_daily_duration = total_duration / remaining_days
-
-        # Start scheduling from the next day
-        current_day = last_day_number + 1
-        current_day_videos = []
-        current_day_duration = 0
-
-        for video in remaining_videos:
-            video_duration = parse_duration(video["duration"])
-
-            if current_day < num_days and current_day_duration + video_duration > avg_daily_duration:
-                if current_day_videos:
-                    schedule[f"Day {current_day}"] = current_day_videos
-                    current_day += 1
-                current_day_videos = []
-                current_day_duration = 0
-
-            current_day_videos.append(video)
-            current_day_duration += video_duration
-
-        if current_day_videos:
-            schedule[f"Day {current_day}"] = current_day_videos
-
-        # Add revision days if needed
-        while current_day < num_days:
-            current_day += 1
-            schedule[f"Day {current_day}"] = [{
-                "title": "Revision Day",
-                "duration": "00:00:00",
-                "link": None,
-                "thumbnail": None
-            }]
-
-        return schedule
-
     except Exception as e:
-        raise ValueError(f"Error creating day-based schedule: {str(e)}")
+        raise RuntimeError(f"Failed to fetch playlist: {str(e)}")
+
+def create_schedule_time_based(video_details, daily_time_minutes):
+    """Create schedule based on daily time limit."""
+    daily_time_seconds = daily_time_minutes * 60
+    schedule = {}
+    current_day = 1
+    current_videos = []
+    current_duration = 0
+    
+    for video in video_details:
+        duration = parse_duration(video['duration'])
+        
+        # If a single video is longer than daily limit, put it alone in a day
+        if duration > daily_time_seconds:
+            if current_videos:
+                schedule[f"Day {current_day}"] = current_videos
+                current_day += 1
+            schedule[f"Day {current_day}"] = [video]
+            current_day += 1
+            current_videos = []
+            current_duration = 0
+            continue
+        
+        if current_duration + duration <= daily_time_seconds:
+            current_videos.append(video)
+            current_duration += duration
+        else:
+            schedule[f"Day {current_day}"] = current_videos
+            current_day += 1
+            current_videos = [video]
+            current_duration = duration
+    
+    if current_videos:
+        schedule[f"Day {current_day}"] = current_videos
+    
+    return schedule
+
+def create_schedule_day_based(video_details, num_days):
+    """Create schedule based on number of days."""
+    schedule = {}
+    
+    if not video_details:
+        return schedule
+    
+    total_duration = sum(parse_duration(v['duration']) for v in video_details)
+    avg_daily = total_duration / num_days
+    
+    current_day = 1
+    current_videos = []
+    current_duration = 0
+    
+    for video in video_details:
+        duration = parse_duration(video['duration'])
+        
+        if current_duration + duration > avg_daily and current_videos:
+            schedule[f"Day {current_day}"] = current_videos
+            current_day += 1
+            current_videos = []
+            current_duration = 0
+            
+            if current_day > num_days:
+                break
+        
+        current_videos.append(video)
+        current_duration += duration
+    
+    if current_videos and current_day <= num_days:
+        schedule[f"Day {current_day}"] = current_videos
+    
+    # Add revision days if needed
+    while current_day < num_days:
+        current_day += 1
+        schedule[f"Day {current_day}"] = [{
+            "title": "Revision Day",
+            "duration": "00:00:00",
+            "link": None,
+            "thumbnail": None
+        }]
+    
+    return schedule
 
 def get_schedule_summary(schedule):
-    """Get summary of the schedule."""
-    total_videos = sum(len(videos) for videos in schedule.values())
+    """Generate comprehensive schedule statistics."""
     total_days = len(schedule)
-    total_duration = sum(
-        sum(parse_duration(video["duration"]) for video in videos if video["duration"] != "00:00:00")
-        for videos in schedule.values()
+    study_days = sum(1 for day in schedule.values() if any(v.get('link') for v in day))
+    
+    total_videos = sum(
+        len([v for v in day if v.get('link') is not None])
+        for day in schedule.values()
+    )
+    
+    total_seconds = sum(
+        sum(parse_duration(v['duration']) for v in day if v.get('link'))
+        for day in schedule.values()
     )
     
     return {
-        "totalVideos": total_videos,
-        "totalDays": total_days,
-        "totalDuration": format_duration(total_duration),
-        "averageDailyDuration": format_duration(total_duration // total_days) if total_days > 0 else "00:00:00"
+        "Total Videos": total_videos,
+        "Total Days": total_days,
+        "Study Days": study_days,
+        "Total Duration": format_duration(total_seconds),
+        "Average Daily": format_duration(total_seconds // study_days) if study_days else "00:00:00"
     }
+
+if __name__ == "__main__":
+    main()
