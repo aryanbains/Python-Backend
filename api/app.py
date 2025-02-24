@@ -22,16 +22,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Updated CORS configuration
-CORS(app, resources={
-    r"/*": {
-        "origins": ["https://learn-fast-kappa.vercel.app/"],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "expose_headers": ["Content-Type", "Authorization"],
-        "supports_credentials": True,
-        "max_age": 120
-    }
-})
+CORS(app)
 
 # MongoDB connection
 MONGO_URI = os.getenv('MONGODB_URI')
@@ -71,11 +62,12 @@ def format_schedule_response(schedule):
 def handle_preflight():
     if request.method == "OPTIONS":
         response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", "https://learn-fast-kappa.vercel.app/")
+        response.headers.add("Access-Control-Allow-Origin", "*")
         response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
         response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
         response.headers.add("Access-Control-Allow-Credentials", "true")
         return response
+
 
 @app.route('/api/schedules/detail/<schedule_id>', methods=['GET', 'OPTIONS'])
 def get_schedule_detail(schedule_id):
