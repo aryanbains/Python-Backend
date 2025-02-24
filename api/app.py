@@ -430,6 +430,22 @@ def get_video_context(schedule_id, video_title):
         print(f"Error fetching video context: {str(e)}")
         return jsonify({'error': 'Failed to fetch video context'}), 500
 
+@app.route('/api/schedules/<schedule_id>', methods=['DELETE'])
+def delete_schedule(schedule_id):
+    try:
+        if not validate_object_id(schedule_id):
+            return jsonify({'error': 'Invalid schedule ID format'}), 400
+        
+        result = schedules_collection.delete_one({'_id': ObjectId(schedule_id)})
+        if result.deleted_count == 0:
+            return jsonify({'error': 'Schedule not found'}), 404
+        
+        return jsonify({'message': 'Schedule deleted successfully'})
+    except Exception as e:
+        print(f"Error deleting schedule: {str(e)}")
+        return jsonify({'error': 'Failed to delete schedule'}), 500
+
+
 @app.route('/api/debug/schedule/<schedule_id>', methods=['GET'])
 def debug_schedule(schedule_id):
     try:
