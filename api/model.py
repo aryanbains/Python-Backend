@@ -12,6 +12,7 @@ try:
 except Exception as e:
     raise RuntimeError(f"Failed to initialize YouTube API: {str(e)}")
 
+
 def main():
     print("=== YouTube Playlist Scheduler ===")
     
@@ -78,7 +79,7 @@ def main():
         print("3. Check API key validity")
         print("4. Try again later if the service is temporarily unavailable")
 
-# Keep all the original functions from the previous code
+
 def validate_playlist_url(url):
     """Validate YouTube playlist URL format."""
     if not url:
@@ -91,6 +92,7 @@ def validate_playlist_url(url):
     if not any(re.search(pattern, url) for pattern in patterns):
         raise ValueError("Invalid YouTube playlist URL format")
     return True
+
 
 def extract_playlist_id(url):
     """Extract playlist ID from URL using multiple patterns."""
@@ -105,11 +107,13 @@ def extract_playlist_id(url):
             return match.group(1)
     raise ValueError("Could not extract playlist ID from URL")
 
+
 def format_duration(seconds):
     """Format seconds to HH:MM:SS with leading zeros."""
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02}:{minutes:02}:{seconds:02}"
+
 
 def parse_iso_duration(duration_str):
     """Convert ISO 8601 duration to total seconds."""
@@ -129,11 +133,13 @@ def parse_iso_duration(duration_str):
             + time_components['M'] * 60 
             + time_components['S'])
 
+
 def parse_duration(duration_str):
     """Convert HH:MM:SS string to total seconds."""
     parts = list(map(int, duration_str.split(':')))
     multipliers = [3600, 60, 1]
     return sum(part * mult for part, mult in zip(parts[-3:], multipliers[-len(parts):]))
+
 
 def fetch_playlist_details(playlist_url):
     """Fetch all video details from a YouTube playlist."""
@@ -183,13 +189,12 @@ def fetch_playlist_details(playlist_url):
             for item in videos_response.get('items', []):
                 try:
                     video_id = item['id']
-                    duration = parse_iso_duration(
-                        item['contentDetails']['duration']
-                    )
+                    duration = parse_iso_duration(item['contentDetails']['duration'])
                     video_details.append({
                         "title": item['snippet']['title'],
                         "duration": format_duration(duration),
-                        "link": f"https://youtu.be/{video_id}",
+                        # Updated link format to youtube.com/watch?v= instead of youtu.be/
+                        "link": f"https://youtube.com/watch?v={video_id}",
                         "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
                         "video_id": video_id
                     })
@@ -211,6 +216,7 @@ def fetch_playlist_details(playlist_url):
         )
     except Exception as e:
         raise RuntimeError(f"Failed to fetch playlist: {str(e)}")
+
 
 def create_schedule_time_based(video_details, daily_time_minutes):
     """Create schedule based on daily time limit."""
@@ -247,6 +253,7 @@ def create_schedule_time_based(video_details, daily_time_minutes):
         schedule[f"Day {current_day}"] = current_videos
     
     return schedule
+
 
 def create_schedule_day_based(video_details, num_days):
     """Create schedule based on number of days."""
@@ -292,6 +299,7 @@ def create_schedule_day_based(video_details, num_days):
     
     return schedule
 
+
 def get_schedule_summary(schedule):
     """Generate comprehensive schedule statistics."""
     total_days = len(schedule)
@@ -314,6 +322,7 @@ def get_schedule_summary(schedule):
         "Total Duration": format_duration(total_seconds),
         "Average Daily": format_duration(total_seconds // study_days) if study_days else "00:00:00"
     }
+
 
 if __name__ == "__main__":
     main()
