@@ -316,11 +316,11 @@ def get_schedule_summary(schedule):
     )
     
     return {
-        "Total Videos": total_videos,
-        "Total Days": total_days,
+        "totalVideos": total_videos,
+        "totalDays": total_days,
         "Study Days": study_days,
-        "Total Duration": format_duration(total_seconds),
-        "Average Daily": format_duration(total_seconds // study_days) if study_days else "00:00:00"
+        "totalDuration": format_duration(total_seconds),
+        "averageDailyDuration": format_duration(total_seconds // study_days) if study_days else "00:00:00"
     }
 
 
