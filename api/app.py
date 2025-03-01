@@ -16,6 +16,7 @@ from model import (
     parse_duration,
     format_duration
 )
+
 # Load environment variables
 load_dotenv()
 
@@ -57,7 +58,9 @@ def format_schedule_response(schedule):
         if isinstance(day_schedule['date'], datetime):
             day_schedule['date'] = day_schedule['date'].strftime('%Y-%m-%d')
     
-    return schedule# Middleware for handling preflight requests
+    return schedule
+
+# Middleware for handling preflight requests
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
@@ -95,10 +98,10 @@ def get_schedule_detail(schedule_id):
             'created_at': schedule['created_at'].isoformat(),
             'updated_at': schedule['updated_at'].isoformat(),
             'summary': {
-                'totalVideos': schedule['summary'].get('Total Videos', 0),
-                'totalDays': schedule['summary'].get('Total Days', 0),
-                'totalDuration': schedule['summary'].get('Total Duration', '00:00:00'),
-                'averageDailyDuration': schedule['summary'].get('Average Daily', '00:00:00')
+                'totalVideos': schedule['summary'].get('totalVideos', 0),
+                'totalDays': schedule['summary'].get('totalDays', 0),
+                'totalDuration': schedule['summary'].get('totalDuration', '00:00:00'),
+                'averageDailyDuration': schedule['summary'].get('averageDailyDuration', '00:00:00')
             },
             'schedule_data': []
         }
@@ -444,7 +447,6 @@ def delete_schedule(schedule_id):
     except Exception as e:
         print(f"Error deleting schedule: {str(e)}")
         return jsonify({'error': 'Failed to delete schedule'}), 500
-
 
 @app.route('/api/debug/schedule/<schedule_id>', methods=['GET'])
 def debug_schedule(schedule_id):
